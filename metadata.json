@@ -1,0 +1,6 @@
+{
+  "name": "LinkOverlay - 제휴 마케팅 CTA 오버레이 도구",
+  "description": "외부 유용한 콘텐츠에 내 브랜드 또는 제휴 마케팅 CTA 배너를 부착하고 단축 링크를 생성하는 오버레이 도구",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
