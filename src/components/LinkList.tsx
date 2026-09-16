@@ -10,7 +10,7 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import { LinkItem } from '../types';
-import { buildShareUrl } from '../utils/linkUtils';
+import { buildShareUrl, buildCleanShareUrl } from '../utils/linkUtils';
 
 interface LinkListProps {
   links: LinkItem[];
@@ -77,6 +77,7 @@ export const LinkList: React.FC<LinkListProps> = ({
             const isCopied = copiedId === item.id;
             const isSelected = selectedLinkId === item.id;
             const shareUrl = buildShareUrl(item);
+            const cleanDisplayUrl = buildCleanShareUrl(item);
 
             return (
               <div
@@ -104,9 +105,9 @@ export const LinkList: React.FC<LinkListProps> = ({
                   </div>
 
                   <div className="space-y-0.5">
-                    <p className="text-[11px] text-slate-500 truncate flex items-center gap-1" title={shareUrl}>
+                    <p className="text-[11px] text-slate-500 truncate flex items-center gap-1" title={cleanDisplayUrl}>
                       <span className="text-slate-400 font-medium">단축주소:</span>
-                      <span className="font-mono text-blue-700 truncate">{shareUrl}</span>
+                      <span className="font-mono text-blue-700 truncate">{cleanDisplayUrl}</span>
                     </p>
                     <p className="text-[11px] text-slate-500 truncate flex items-center gap-1" title={item.targetUrl}>
                       <span className="text-slate-400 font-medium">연결원본:</span>

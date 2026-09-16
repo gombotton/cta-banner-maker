@@ -242,7 +242,8 @@ export function getEffectiveBaseOrigin(): string {
 
 /**
  * Build the shareable banner short URL based on current domain (window.location.origin).
- * Produces clean, short URLs like: https://your-domain.vercel.app/l/blog-hamr
+ * Includes compressed payload hash (#d=...) to guarantee 100% reliable rendering on any
+ * device, incognito tab, or static hosting platform (Vercel) without external DB dependency.
  */
 export function buildShareUrl(link: LinkItem, customOrigin?: string): string {
   let origin = customOrigin;
@@ -254,14 +255,24 @@ export function buildShareUrl(link: LinkItem, customOrigin?: string): string {
   }
   origin = (origin || '').trim().replace(/\/+$/, '');
   const cleanSlug = (link.slug || 'link').trim().replace(/^\/+/, '');
-  return `${origin}/l/${cleanSlug}`;
+  const payload = encodeLinkToPayload(link);
+  return `${origin}/l/${encodeURIComponent(cleanSlug)}#d=${payload}`;
 }
 
 /**
- * Clean short URL without data payload query string (for display)
+ * Clean short URL without data payload hash (for concise visual display in UI)
  */
 export function buildCleanShareUrl(link: LinkItem, customOrigin?: string): string {
-  return buildShareUrl(link, customOrigin);
+  let origin = customOrigin;
+  if (!origin && typeof window !== 'undefined') {
+    origin = window.location.origin;
+  }
+  if (!origin) {
+    origin = getEffectiveBaseOrigin();
+  }
+  origin = (origin || '').trim().replace(/\/+$/, '');
+  const cleanSlug = (link.slug || 'link').trim().replace(/^\/+/, '');
+  return `${origin}/l/${cleanSlug}`;
 }
 
 /**

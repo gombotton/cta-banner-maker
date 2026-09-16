@@ -156,6 +156,7 @@ export default function App() {
 
   // Dedicated newly created link state for immediate celebration and copy banner
   const [newlyCreatedLink, setNewlyCreatedLink] = useState<LinkItem | null>(null);
+  const [visitorFallbackLink, setVisitorFallbackLink] = useState<LinkItem | null>(null);
   const [isCreating, setIsCreating] = useState<boolean>(false);
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
@@ -252,9 +253,14 @@ export default function App() {
       try {
         const searchParams = new URLSearchParams(window.location.search);
         encodedData = searchParams.get('d') || '';
-        if (!encodedData && window.location.hash && window.location.hash.includes('?')) {
-          const queryPart = window.location.hash.split('?')[1];
-          encodedData = new URLSearchParams(queryPart).get('d') || '';
+        if (!encodedData && window.location.hash) {
+          const rawHash = window.location.hash.replace(/^#\/?/, '');
+          if (rawHash.startsWith('d=')) {
+            encodedData = rawHash.replace(/^d=/, '');
+          } else if (rawHash.includes('d=')) {
+            const match = rawHash.match(/[?&#]d=([^&]+)/) || rawHash.match(/d=([^&]+)/);
+            if (match) encodedData = match[1];
+          }
         }
       } catch {}
 
@@ -280,7 +286,9 @@ export default function App() {
           };
 
           setLinks((prev) => {
-            const existingIdx = prev.findIndex((l) => l.slug.toLowerCase() === restoredLink.slug.toLowerCase());
+            const existingIdx = prev.findIndex(
+              (l) => l.slug.toLowerCase() === restoredLink.slug.toLowerCase()
+            );
             if (existingIdx >= 0) {
               const updated = [...prev];
               updated[existingIdx] = restoredLink;
@@ -293,7 +301,7 @@ export default function App() {
           setIsPublicVisitor(true);
           setIsVisitorLoading(false);
           try {
-            window.history.replaceState(null, '', `/l/${restoredLink.slug}`);
+            window.history.replaceState(null, '', `/l/${encodeURIComponent(restoredLink.slug)}`);
           } catch {}
           return;
         }
@@ -327,11 +335,15 @@ export default function App() {
         }
       } catch {}
 
-      const localMatch = currentPool.find(
-        (l) =>
-          l.slug.toLowerCase().trim() === targetSlug ||
-          l.id.toLowerCase().trim() === targetSlug
-      );
+      const localMatch = currentPool.find((l) => {
+        const cleanS = l.slug.toLowerCase().trim();
+        return (
+          cleanS === targetSlug ||
+          l.id.toLowerCase().trim() === targetSlug ||
+          decodeURIComponent(cleanS) === targetSlug ||
+          encodeURIComponent(cleanS) === targetSlug
+        );
+      });
       if (localMatch) {
         setActiveLinkId(localMatch.id);
         setIsVisitorLoading(false);
@@ -347,7 +359,13 @@ export default function App() {
           if (data && data.success && data.link) {
             const fetchedLink: LinkItem = sanitizeLinkItem(data.link);
             setLinks((prev) => {
-              if (prev.some((l) => l.id === fetchedLink.id || l.slug.toLowerCase().trim() === fetchedLink.slug.toLowerCase().trim())) {
+              if (
+                prev.some(
+                  (l) =>
+                    l.id === fetchedLink.id ||
+                    l.slug.toLowerCase().trim() === fetchedLink.slug.toLowerCase().trim()
+                )
+              ) {
                 return prev;
               }
               return [fetchedLink, ...prev];
@@ -361,7 +379,7 @@ export default function App() {
         // Ignore backend fetch errors (e.g. static SPA hosting on Vercel)
       }
 
-      // 3. Fallback: immediately resolve so user ALWAYS sees target page & overlay banner, never builder or 404
+      // 3. Fallback: immediately resolve so visitor ALWAYS sees target page & overlay banner, never builder or 404
       if (currentPool.length > 0) {
         setActiveLinkId(currentPool[0].id);
       } else {
@@ -381,7 +399,8 @@ export default function App() {
           clicks: 0,
           createdAt: new Date().toLocaleDateString('ko-KR'),
         };
-        setLinks([fallbackItem]);
+        // Preserve user local storage and do not overwrite creator link list with fallback
+        setVisitorFallbackLink(fallbackItem);
         setActiveLinkId(fallbackItem.id);
       }
       setIsVisitorLoading(false);
@@ -574,9 +593,20 @@ export default function App() {
         createdAt: new Date().toLocaleDateString('ko-KR'),
       };
 
-      let finalSavedLink = newLink;
+      // 1. Immediately save to local state and localStorage so the link appears in the list instantly!
+      setLinks((prev) => {
+        const next = [newLink, ...prev.filter((l) => l.id !== newLink.id && l.slug !== newLink.slug)];
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+        } catch {}
+        return next;
+      });
+      setActiveLinkId(newLink.id);
+      setRecentLink(newLink);
+      setNewlyCreatedLink(newLink);
+      addToast(`단축 CTA 링크가 성공적으로 생성되었습니다! (/l/${newLink.slug})`, 'success');
 
-      // Save to backend API and get confirmed unique link
+      // 2. Sync to backend API (handles Vercel Serverless and Node server)
       try {
         const res = await fetch('/api/links', {
           method: 'POST',
@@ -586,21 +616,26 @@ export default function App() {
             origin: typeof window !== 'undefined' ? window.location.origin : '',
           }),
         });
-        if (res.ok) {
+        const contentType = res.headers.get('content-type') || '';
+        if (res.ok && contentType.includes('application/json')) {
           const data = await res.json();
-          if (data.success && data.link) {
-            finalSavedLink = data.link;
+          if (data && data.success && data.link) {
+            const confirmedLink = sanitizeLinkItem(data.link);
+            setLinks((prev) => {
+              const updated = [confirmedLink, ...prev.filter((l) => l.id !== confirmedLink.id && l.id !== newLink.id)];
+              try {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+              } catch {}
+              return updated;
+            });
+            setActiveLinkId(confirmedLink.id);
+            setRecentLink(confirmedLink);
+            setNewlyCreatedLink(confirmedLink);
           }
         }
       } catch (err) {
-        console.error('Failed to save to backend API:', err);
+        console.error('Failed to sync link to backend API:', err);
       }
-
-      setLinks((prev) => [finalSavedLink, ...prev.filter((l) => l.id !== finalSavedLink.id)]);
-      setActiveLinkId(finalSavedLink.id);
-      setRecentLink(finalSavedLink);
-      setNewlyCreatedLink(finalSavedLink);
-      addToast(`단축 CTA 링크가 성공적으로 생성되었습니다! (/l/${finalSavedLink.slug})`, 'success');
     } finally {
       setIsCreating(false);
     }
@@ -724,16 +759,28 @@ export default function App() {
     if (preloadedLink && isPublicVisitor) {
       return preloadedLink;
     }
+    if (visitorFallbackLink && isPublicVisitor && (activeLinkId === visitorFallbackLink.id || !activeLinkId)) {
+      return visitorFallbackLink;
+    }
     if (activeLinkId) {
       const found = links.find((l) => l.id === activeLinkId);
       if (found) return found;
     }
+    if (visitorFallbackLink && isPublicVisitor) {
+      return visitorFallbackLink;
+    }
     const currentSlug = getSlugFromCurrentUrl().slug;
     if (currentSlug) {
       const cleanSlug = currentSlug.toLowerCase().trim();
-      const foundBySlug = links.find(
-        (l) => l.slug.toLowerCase().trim() === cleanSlug || l.id.toLowerCase().trim() === cleanSlug
-      );
+      const foundBySlug = links.find((l) => {
+        const s = l.slug.toLowerCase().trim();
+        return (
+          s === cleanSlug ||
+          l.id.toLowerCase().trim() === cleanSlug ||
+          decodeURIComponent(s) === cleanSlug ||
+          encodeURIComponent(s) === cleanSlug
+        );
+      });
       if (foundBySlug) return foundBySlug;
     }
     const currentHash =
@@ -778,7 +825,7 @@ export default function App() {
     }
 
     return null;
-  }, [links, activeLinkId, isPublicVisitor, preloadedLink]);
+  }, [links, activeLinkId, isPublicVisitor, preloadedLink, visitorFallbackLink]);
 
   const totalClicks = links.reduce((sum, item) => {
     const count = typeof item.clicks === 'number' && !isNaN(item.clicks) ? item.clicks : 0;
