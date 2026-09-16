@@ -243,12 +243,21 @@ async function startServer() {
     try {
       let fetchUrl = targetUrl.trim();
 
-      // Handle Naver Blog URLs -> fetch direct desktop PostView for complete original content & layout
-      const naverMatch = fetchUrl.match(/(?:m\.)?blog\.naver\.com\/([a-zA-Z0-9_-]+)\/(\d+)/i);
-      if (naverMatch) {
-        const blogId = naverMatch[1];
-        const logNo = naverMatch[2];
-        fetchUrl = `https://blog.naver.com/PostView.naver?blogId=${blogId}&logNo=${logNo}&redirect=Dlog&widgetTypeCall=true&directAccess=false`;
+      // 1. Handle Naver Blog post URLs (blog.naver.com/userId/logNo or PostView.naver) -> fetch clean authentic article view
+      const naverPostMatch =
+        fetchUrl.match(/(?:m\.)?blog\.naver\.com\/([a-zA-Z0-9_-]+)\/(\d+)/i) ||
+        fetchUrl.match(/blog\.naver\.com\/PostView\.naver\?.*?(?:blogId=([a-zA-Z0-9_-]+).*?logNo=(\d+)|logNo=(\d+).*?blogId=([a-zA-Z0-9_-]+))/i) ||
+        fetchUrl.match(/section\.blog\.naver\.com\/.*?(?:blogId=([a-zA-Z0-9_-]+).*?logNo=(\d+)|logNo=(\d+).*?blogId=([a-zA-Z0-9_-]+))/i);
+
+      if (naverPostMatch) {
+        const blogId = naverPostMatch[1] || naverPostMatch[4];
+        const logNo = naverPostMatch[2] || naverPostMatch[3];
+        if (blogId && logNo && !['PostView', 'BlogHome', 'Recommendation'].includes(blogId)) {
+          fetchUrl = `https://m.blog.naver.com/${blogId}/${logNo}`;
+        }
+      } else if (fetchUrl.includes('section.blog.naver.com')) {
+        // Section blog home portal -> Recommendation feed
+        fetchUrl = 'https://m.blog.naver.com/Recommendation.naver';
       }
 
       const response = await fetch(fetchUrl, {
@@ -268,9 +277,17 @@ async function startServer() {
       const urlObj = new URL(fetchUrl);
       const baseUrl = `${urlObj.protocol}//${urlObj.host}`;
 
-      if (!html.includes('<base ') && !html.includes('<base\n')) {
+      // Remove any existing relative base tag (like <base href="/home" />) which breaks relative assets
+      html = html.replace(/<base[^>]*>/gi, '');
+      if (html.includes('<head>') || html.includes('<head ')) {
         html = html.replace(/<head([^>]*)>/i, `<head$1>\n<base href="${baseUrl}/">`);
+      } else {
+        html = `<base href="${baseUrl}/">\n` + html;
       }
+
+      // Neutralize frame-busting scripts (top.location = ... / window.top !== window.self)
+      html = html.replace(/([^\w$])(top|parent)\.location/g, '$1window.__safe_dummy_loc');
+      html = html.replace(/([^\w$])window\.top([^\w$])/g, '$1window.self$2');
 
       // Replace Naver SmartEditor lazy-loaded blur thumbnails with high-res full images
       html = html.replace(

@@ -193,7 +193,7 @@ export const VisitorView: React.FC<VisitorViewProps> = ({
                 <div className="flex flex-col items-center gap-3">
                   <div className="w-8 h-8 border-3 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
                   <span className="text-xs font-medium text-slate-600">
-                    타깃 웹페이지 전문을 불러오는 중...
+                    타깃 웹페이지를 불러오는 중...
                   </span>
                 </div>
               </div>
@@ -204,7 +204,6 @@ export const VisitorView: React.FC<VisitorViewProps> = ({
               src={getEmbedTargetUrl(activeLink.targetUrl)}
               className="w-full h-full border-none bg-white"
               title="Target Site Preview"
-              sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation allow-modals allow-downloads"
               onLoad={() => {
                 setIframeLoading(false);
                 setIframeError(false);

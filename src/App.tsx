@@ -83,24 +83,21 @@ export default function App() {
   const preloadedLink: LinkItem | null = rawPreloaded ? sanitizeLinkItem(rawPreloaded) : null;
   const initialUrlInfo = getSlugFromCurrentUrl();
 
+  // User requirement: "생성된 링크목록은 빈상태로 둘것" -> start with completely empty list
+  const STORAGE_KEY = 'user_overlay_links';
+
   // Load links from localStorage (clean of any sample/demo data)
   const [links, setLinks] = useState<LinkItem[]>(() => {
     let baseList: LinkItem[] = [];
     try {
-      const saved = localStorage.getItem('overlay_links');
+      // Clear legacy sample/mock storage
+      localStorage.removeItem('overlay_links');
+
+      const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          // Filter out legacy sample links
-          baseList = parsed.filter(
-            (l) =>
-              l &&
-              l.id !== 'link_init_1' &&
-              l.id !== 'link_init_2' &&
-              !String(l.id).startsWith('link_init_') &&
-              l.slug !== 'why-not' &&
-              l.slug !== 'clean3s'
-          );
+          baseList = parsed.map((l, i) => sanitizeLinkItem(l, i));
         }
       }
     } catch {
@@ -119,7 +116,7 @@ export default function App() {
         .map((l, i) => sanitizeLinkItem(l, i));
       return [preloadedLink, ...filtered];
     }
-    return baseList.map((l, i) => sanitizeLinkItem(l, i));
+    return baseList;
   });
 
   // Whether the app is running in public visitor mode (when accessed via /l/:slug by external visitors)
@@ -202,7 +199,7 @@ export default function App() {
   // Sync links to localStorage
   useEffect(() => {
     try {
-      localStorage.setItem('overlay_links', JSON.stringify(links));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(links));
     } catch (e) {
       console.error('Failed to save to localStorage:', e);
     }
@@ -212,7 +209,8 @@ export default function App() {
   useEffect(() => {
     // 1. Sync any existing local storage links to server database
     try {
-      const saved = localStorage.getItem('overlay_links');
+      localStorage.removeItem('overlay_links');
+      const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
@@ -318,7 +316,7 @@ export default function App() {
       // 1. Check local storage directly for freshest links
       let currentPool = [...links];
       try {
-        const raw = localStorage.getItem('overlay_links');
+        const raw = localStorage.getItem(STORAGE_KEY);
         if (raw) {
           const parsed = JSON.parse(raw);
           if (Array.isArray(parsed) && parsed.length > 0) {
