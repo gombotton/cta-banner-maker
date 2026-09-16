@@ -14,7 +14,7 @@ import {
   ShieldCheck
 } from 'lucide-react';
 import { LinkItem } from '../types';
-import { getEmbedTargetUrl } from '../utils/linkUtils';
+import { getEmbedTargetUrl, buildShareUrl } from '../utils/linkUtils';
 
 interface VisitorViewProps {
   activeLink: LinkItem | null;
@@ -75,7 +75,7 @@ export const VisitorView: React.FC<VisitorViewProps> = ({
   const subtextColor = isLightBg ? '#64748b' : '#cbd5e1';
 
   // Format short URL
-  const shortUrl = `${window.location.origin}/#${activeLink.slug}`;
+  const shortUrl = buildShareUrl(activeLink);
 
   // Extract domain for display
   let domain = '';

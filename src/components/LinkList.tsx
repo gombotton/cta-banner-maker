@@ -19,7 +19,7 @@ interface LinkListProps {
   onDeleteLink: (id: string) => void;
   onClearAll: () => void;
   onCopyShortUrl: (item: LinkItem) => void;
-  onLoadSample: () => void;
+  onLoadSample?: () => void;
 }
 
 export const LinkList: React.FC<LinkListProps> = ({
@@ -29,7 +29,6 @@ export const LinkList: React.FC<LinkListProps> = ({
   onDeleteLink,
   onClearAll,
   onCopyShortUrl,
-  onLoadSample,
 }) => {
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
@@ -63,17 +62,13 @@ export const LinkList: React.FC<LinkListProps> = ({
 
       <div id="link-list" className="space-y-3 max-h-[480px] overflow-y-auto pr-1">
         {links.length === 0 ? (
-          <div className="text-center py-10 px-4 bg-slate-50 border border-dashed border-slate-200 rounded-xl space-y-3">
-            <p className="text-slate-500 text-xs font-medium">
-              생성된 링크가 없습니다. 위 입력 폼에서 새 링크를 만들어보세요!
+          <div className="text-center py-12 px-4 bg-slate-50 border border-dashed border-slate-200 rounded-xl space-y-2">
+            <p className="text-slate-600 text-xs font-semibold">
+              생성된 링크 목록이 비어 있습니다.
             </p>
-            <button
-              type="button"
-              onClick={onLoadSample}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-700 hover:bg-slate-100 hover:text-blue-600 transition shadow-xs cursor-pointer"
-            >
-              예시 데이터 가져오기
-            </button>
+            <p className="text-slate-400 text-[11px]">
+              위 입력 폼에 정보를 입력하고 배포용 CTA 단축 링크를 생성해 보세요.
+            </p>
           </div>
         ) : (
           links.map((item, index) => {

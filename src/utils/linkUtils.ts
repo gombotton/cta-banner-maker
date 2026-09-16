@@ -150,23 +150,36 @@ export function getSlugFromCurrentUrl(): { slug: string | null; isPublicViewer: 
     return { slug: rMatch[1].toLowerCase().trim(), isPublicViewer: true };
   }
 
-  // Hash check: /#slug or /#preview/slug (internal in-app navigation/preview, NOT public visitor)
+  // Direct path check: /:slug (e.g. /en-b2cr, excluding reserved root/system paths)
+  const directMatch = pathname.match(/^\/([^/?#]+)$/i);
+  if (directMatch && directMatch[1]) {
+    const candidate = directMatch[1].toLowerCase().trim();
+    const reserved = [
+      '',
+      'api',
+      'assets',
+      'favicon.ico',
+      'builder',
+      'admin',
+      'home',
+      'dashboard',
+      'index.html',
+      'robots.txt',
+      'sitemap.xml',
+    ];
+    if (!reserved.includes(candidate)) {
+      return { slug: candidate, isPublicViewer: true };
+    }
+  }
+
+  // Hash check: /#slug, /#l/slug, /#/l/slug
   if (hash && hash.length > 1) {
     const cleanHash = hash.replace(/^#\/?/, '').split('&')[0].split('?')[0].trim().toLowerCase();
-    // Exclude reserved builder navigation keywords
-    if (
-      cleanHash &&
-      cleanHash !== 'builder' &&
-      cleanHash !== 'home' &&
-      cleanHash !== 'dashboard' &&
-      cleanHash !== 'admin'
-    ) {
-      const slug = cleanHash.replace(/^(l|r|v|view|preview)\//i, '');
+    const reserved = ['builder', 'home', 'dashboard', 'admin', ''];
+    if (cleanHash && !reserved.includes(cleanHash)) {
+      const slug = cleanHash.replace(/^(l|r|v|view|visitor|preview)\//i, '');
       if (slug) {
-        // Hash navigation inside AI Studio preview or SPA should NOT lock the app into public visitor mode.
-        // It selects the active link while keeping the builder and header accessible.
-        const isExplicitVisitorHash = cleanHash.startsWith('visitor/') || cleanHash.startsWith('v/');
-        return { slug, isPublicViewer: isExplicitVisitorHash };
+        return { slug, isPublicViewer: true };
       }
     }
   }
@@ -228,10 +241,25 @@ export function getEffectiveBaseOrigin(): string {
 }
 
 /**
- * Build the clean, concise, shareable short URL
- * Standard format: https://domain/l/:slug (identical to sharecta /l/:slug)
+ * Build the self-contained, shareable short URL.
+ * Embedding the data payload in ?d= ensures that when the link is opened on any platform
+ * (Vercel, Netlify, GitHub Pages, KakaoTalk mobile, other browsers), the visitor view
+ * renders instantly without requiring an external database or backend server.
  */
 export function buildShareUrl(link: LinkItem, customOrigin?: string): string {
+  let origin = customOrigin || getEffectiveBaseOrigin();
+  if (!origin && typeof window !== 'undefined') {
+    origin = window.location.origin;
+  }
+  origin = origin.replace(/\/+$/, '');
+  const encodedPayload = encodeLinkToPayload(link);
+  return `${origin}/l/${link.slug}?d=${encodedPayload}`;
+}
+
+/**
+ * Clean short URL without data payload query string (for display)
+ */
+export function buildCleanShareUrl(link: LinkItem, customOrigin?: string): string {
   let origin = customOrigin || getEffectiveBaseOrigin();
   if (!origin && typeof window !== 'undefined') {
     origin = window.location.origin;

@@ -1,17 +1,18 @@
 import React from 'react';
 import {
   Sparkles,
-  RefreshCw,
   Globe,
   Image as ImageIcon,
   PlusCircle,
   Palette,
   LayoutTemplate,
   Tag,
-  ExternalLink
+  ExternalLink,
+  Copy,
+  Check
 } from 'lucide-react';
 import { BannerPosition, LinkItem } from '../types';
-import { SAMPLE_PRESETS } from '../data/sampleData';
+import { buildShareUrl, copyTextToClipboard } from '../utils/linkUtils';
 
 export interface FormState {
   targetUrl: string;
@@ -31,11 +32,12 @@ interface LinkBuilderFormProps {
   formState: FormState;
   onChange: (updates: Partial<FormState>) => void;
   onSubmit: (e: React.FormEvent) => void;
-  onApplyPreset: (presetIndex: number) => void;
+  onApplyPreset?: (presetIndex: number) => void;
   isCreating?: boolean;
   errors?: Record<string, string | undefined>;
   newlyCreatedLink?: LinkItem | null;
   onCopyCreatedLink?: (url: string) => void;
+  onOpenOverlay?: (link: LinkItem) => void;
 }
 
 const COLOR_PRESETS = [
@@ -58,28 +60,26 @@ export const LinkBuilderForm: React.FC<LinkBuilderFormProps> = ({
   formState,
   onChange,
   onSubmit,
-  onApplyPreset,
   isCreating = false,
   errors = {} as Record<string, string | undefined>,
   newlyCreatedLink,
   onCopyCreatedLink,
+  onOpenOverlay,
 }) => {
   const [createdCopied, setCreatedCopied] = React.useState(false);
-  const currentOrigin = typeof window !== 'undefined' ? window.location.origin : '';
   const currentSlugPreview = formState.customSlug?.trim()
     ? formState.customSlug.trim().toLowerCase()
     : (formState.targetUrl ? '자동생성' : 'slug');
 
-  const handleCopyNewLink = () => {
+  const handleCopyNewLink = async () => {
     if (!newlyCreatedLink) return;
-    const url = `${currentOrigin}/l/${newlyCreatedLink.slug}`;
-    navigator.clipboard.writeText(url).then(() => {
+    const url = buildShareUrl(newlyCreatedLink);
+    const success = await copyTextToClipboard(url);
+    if (success) {
       setCreatedCopied(true);
       setTimeout(() => setCreatedCopied(false), 2000);
-      if (onCopyCreatedLink) onCopyCreatedLink(url);
-    }).catch(() => {
-      if (onCopyCreatedLink) onCopyCreatedLink(url);
-    });
+    }
+    if (onCopyCreatedLink) onCopyCreatedLink(url);
   };
 
   return (
@@ -94,23 +94,6 @@ export const LinkBuilderForm: React.FC<LinkBuilderFormProps> = ({
           <p className="text-xs text-slate-500 mt-0.5">
             외부 유용한 콘텐츠에 내 브랜드 또는 제휴 마케팅 배너를 오버레이로 부착합니다.
           </p>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <span className="text-xs text-slate-400 font-medium hidden sm:inline">예시:</span>
-          <div className="flex gap-1">
-            {SAMPLE_PRESETS.map((_, idx) => (
-              <button
-                key={idx}
-                type="button"
-                onClick={() => onApplyPreset(idx)}
-                className="text-xs px-2 py-1 rounded bg-slate-100 hover:bg-blue-50 hover:text-blue-600 text-slate-600 transition font-medium flex items-center gap-1"
-                title={`예시 ${idx + 1} 적용`}
-              >
-                <RefreshCw className="w-3 h-3" />
-                예시 {idx + 1}
-              </button>
-            ))}
-          </div>
         </div>
       </div>
 
@@ -435,16 +418,48 @@ export const LinkBuilderForm: React.FC<LinkBuilderFormProps> = ({
 
         {/* Newly Created Link Notification */}
         {newlyCreatedLink && (
-          <div className="mt-3 p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between gap-2 animate-fadeIn">
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0"></span>
-              <span className="text-xs font-semibold text-emerald-800 truncate">
-                🎉 링크 생성 완료! 아래 목록에서 바로 복사하여 사용하세요.
+          <div className="mt-3 p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl space-y-2.5 animate-fadeIn">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shrink-0"></span>
+                <span className="text-xs font-bold text-emerald-900 truncate">
+                  🎉 CTA 단축 링크가 성공적으로 생성되었습니다!
+                </span>
+              </div>
+              <span className="text-xs font-mono font-bold text-emerald-800 bg-white px-2 py-0.5 rounded border border-emerald-200 shrink-0">
+                /{newlyCreatedLink.slug}
               </span>
             </div>
-            <span className="text-xs font-mono font-bold text-emerald-700 bg-white px-2 py-0.5 rounded border border-emerald-200 shrink-0">
-              /{newlyCreatedLink.slug}
-            </span>
+            <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-emerald-100">
+              <button
+                type="button"
+                onClick={handleCopyNewLink}
+                className="flex-1 min-w-[120px] py-2 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-xs cursor-pointer active:scale-95"
+              >
+                {createdCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                {createdCopied ? '복사 완료!' : '단축 링크 복사'}
+              </button>
+              <a
+                href={buildShareUrl(newlyCreatedLink)}
+                target="_blank"
+                rel="noreferrer"
+                className="py-2 px-3 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 rounded-lg text-xs font-semibold transition flex items-center justify-center gap-1 shadow-2xs"
+                title="새 탭에서 실제 화면 열기"
+              >
+                <span>새 탭에서 열기</span>
+                <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
+              </a>
+              {onOpenOverlay && (
+                <button
+                  type="button"
+                  onClick={() => onOpenOverlay(newlyCreatedLink)}
+                  className="py-2 px-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition flex items-center justify-center gap-1 shadow-2xs cursor-pointer"
+                  title="이 창에서 즉시 오버레이 화면 확인"
+                >
+                  <span>오버레이 보기</span>
+                </button>
+              )}
+            </div>
           </div>
         )}
       </form>

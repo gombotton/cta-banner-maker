@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { LinkItem, BannerPosition } from './types';
-import { INITIAL_LINKS, SAMPLE_PRESETS } from './data/sampleData';
+import { INITIAL_LINKS } from './data/sampleData';
 import { Header } from './components/Header';
 import { LinkBuilderForm, FormState } from './components/LinkBuilderForm';
 import { LinkList } from './components/LinkList';
@@ -42,25 +42,76 @@ function sanitizeLinkItem(item: any, fallbackIndex = 0): LinkItem {
 }
 
 export default function App() {
+  // Check if current page has inline encoded payload ?d=...
+  const inlinePayloadLink = useMemo<LinkItem | null>(() => {
+    if (typeof window === 'undefined') return null;
+    try {
+      const searchParams = new URLSearchParams(window.location.search);
+      let d = searchParams.get('d');
+      if (!d && window.location.hash && window.location.hash.includes('?')) {
+        const queryPart = window.location.hash.split('?')[1];
+        d = new URLSearchParams(queryPart).get('d');
+      }
+      if (d) {
+        const decoded = decodeLinkFromPayload(d);
+        if (decoded && decoded.targetUrl && decoded.headline) {
+          return {
+            id: `link_${decoded.slug || 'direct'}_${Date.now()}`,
+            slug: decoded.slug || 'link',
+            targetUrl: decoded.targetUrl,
+            logoUrl: decoded.logoUrl || '',
+            headline: decoded.headline,
+            subtext: decoded.subtext || '',
+            btnText: decoded.btnText || '보러가기',
+            btnUrl: decoded.btnUrl || '',
+            bgColor: decoded.bgColor || '#ffffff',
+            btnColor: decoded.btnColor || '#ef4444',
+            badgeText: decoded.badgeText || '',
+            position: decoded.position || 'card-bottom-left',
+            clicks: 0,
+            createdAt: new Date().toLocaleDateString('ko-KR'),
+          };
+        }
+      }
+    } catch {}
+    return null;
+  }, []);
+
   // Check if current page has server-preloaded link data or is accessed as a visitor via short link (/l/:slug or #slug)
   const rawPreloaded: any =
     typeof window !== 'undefined' ? (window as any).__PRELOADED_LINK__ || null : null;
   const preloadedLink: LinkItem | null = rawPreloaded ? sanitizeLinkItem(rawPreloaded) : null;
   const initialUrlInfo = getSlugFromCurrentUrl();
 
-  // Load links from localStorage or default initial sample links
+  // Load links from localStorage (clean of any sample/demo data)
   const [links, setLinks] = useState<LinkItem[]>(() => {
-    let baseList = INITIAL_LINKS;
+    let baseList: LinkItem[] = [];
     try {
       const saved = localStorage.getItem('overlay_links');
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          baseList = parsed;
+        if (Array.isArray(parsed)) {
+          // Filter out legacy sample links
+          baseList = parsed.filter(
+            (l) =>
+              l &&
+              l.id !== 'link_init_1' &&
+              l.id !== 'link_init_2' &&
+              !String(l.id).startsWith('link_init_') &&
+              l.slug !== 'why-not' &&
+              l.slug !== 'clean3s'
+          );
         }
       }
     } catch {
       // Fallback
+    }
+
+    if (inlinePayloadLink) {
+      const filtered = baseList.filter(
+        (l) => l.slug.toLowerCase() !== inlinePayloadLink.slug.toLowerCase()
+      );
+      return [inlinePayloadLink, ...filtered];
     }
     if (preloadedLink) {
       const filtered = baseList
@@ -73,11 +124,13 @@ export default function App() {
 
   // Whether the app is running in public visitor mode (when accessed via /l/:slug by external visitors)
   const [isPublicVisitor, setIsPublicVisitor] = useState<boolean>(() => {
+    if (inlinePayloadLink) return true;
     if (preloadedLink) return true;
     return initialUrlInfo.isPublicViewer;
   });
 
   const [activeLinkId, setActiveLinkId] = useState<string | null>(() => {
+    if (inlinePayloadLink) return inlinePayloadLink.id;
     if (preloadedLink) return preloadedLink.id;
     if (initialUrlInfo.isPublicViewer && initialUrlInfo.slug) {
       const match = links.find((l) => l.slug.toLowerCase() === initialUrlInfo.slug?.toLowerCase());
@@ -88,6 +141,7 @@ export default function App() {
   });
 
   const [isVisitorLoading, setIsVisitorLoading] = useState<boolean>(() => {
+    if (inlinePayloadLink) return false;
     if (!initialUrlInfo.isPublicViewer) return false;
     if (preloadedLink) return false;
     if (initialUrlInfo.slug) {
@@ -96,8 +150,9 @@ export default function App() {
     return false;
   });
 
-  // Track the most recently created or selected link for prominent ShortUrlBox display
+  // Track the most recently created or selected link
   const [recentLink, setRecentLink] = useState<LinkItem | null>(() => {
+    if (inlinePayloadLink) return inlinePayloadLink;
     if (preloadedLink) return preloadedLink;
     return links.length > 0 ? links[0] : null;
   });
@@ -114,19 +169,19 @@ export default function App() {
     | null
   >(null);
 
-  // Form state for real-time live preview & creation
+  // Form state initialized cleanly without sample data
   const [formState, setFormState] = useState<FormState>({
-    targetUrl: SAMPLE_PRESETS[0].targetUrl,
+    targetUrl: '',
     customSlug: '',
-    logoUrl: SAMPLE_PRESETS[0].logoUrl || '',
-    headline: SAMPLE_PRESETS[0].headline,
-    subtext: SAMPLE_PRESETS[0].subtext || '',
-    btnText: SAMPLE_PRESETS[0].btnText,
-    btnUrl: SAMPLE_PRESETS[0].btnUrl,
-    bgColor: SAMPLE_PRESETS[0].bgColor,
-    btnColor: SAMPLE_PRESETS[0].btnColor,
-    position: SAMPLE_PRESETS[0].position,
-    badgeText: SAMPLE_PRESETS[0].badgeText || '',
+    logoUrl: '',
+    headline: '',
+    subtext: '',
+    btnText: '보러가기',
+    btnUrl: '',
+    bgColor: '#ffffff',
+    btnColor: '#ef4444',
+    position: 'card-bottom-left',
+    badgeText: '',
   });
 
   // Toasts
@@ -194,6 +249,58 @@ export default function App() {
     const resolveCurrentRoute = async () => {
       const urlInfo = getSlugFromCurrentUrl();
 
+      // Check if URL has ?d= or #d= payload
+      let encodedData = '';
+      try {
+        const searchParams = new URLSearchParams(window.location.search);
+        encodedData = searchParams.get('d') || '';
+        if (!encodedData && window.location.hash && window.location.hash.includes('?')) {
+          const queryPart = window.location.hash.split('?')[1];
+          encodedData = new URLSearchParams(queryPart).get('d') || '';
+        }
+      } catch {}
+
+      if (encodedData) {
+        const decoded = decodeLinkFromPayload(encodedData);
+        if (decoded && decoded.targetUrl && decoded.headline) {
+          const restoredSlug = decoded.slug || urlInfo.slug || 'link';
+          const restoredLink: LinkItem = {
+            id: `link_${restoredSlug}_${Date.now()}`,
+            slug: restoredSlug,
+            targetUrl: decoded.targetUrl,
+            logoUrl: decoded.logoUrl || '',
+            headline: decoded.headline,
+            subtext: decoded.subtext || '',
+            btnText: decoded.btnText || '보러가기',
+            btnUrl: decoded.btnUrl || '',
+            bgColor: decoded.bgColor || '#ffffff',
+            btnColor: decoded.btnColor || '#ef4444',
+            badgeText: decoded.badgeText || '',
+            position: decoded.position || 'card-bottom-left',
+            clicks: 0,
+            createdAt: new Date().toLocaleDateString('ko-KR'),
+          };
+
+          setLinks((prev) => {
+            const existingIdx = prev.findIndex((l) => l.slug.toLowerCase() === restoredLink.slug.toLowerCase());
+            if (existingIdx >= 0) {
+              const updated = [...prev];
+              updated[existingIdx] = restoredLink;
+              return updated;
+            }
+            return [restoredLink, ...prev];
+          });
+
+          setActiveLinkId(restoredLink.id);
+          setIsPublicVisitor(true);
+          setIsVisitorLoading(false);
+          try {
+            window.history.replaceState(null, '', `/l/${restoredLink.slug}`);
+          } catch {}
+          return;
+        }
+      }
+
       if (!urlInfo.isPublicViewer) {
         setIsPublicVisitor(false);
         return;
@@ -208,7 +315,11 @@ export default function App() {
       }
 
       // Check if already present in state
-      const localMatch = links.find((l) => l.slug.toLowerCase() === targetSlug);
+      const localMatch = links.find(
+        (l) =>
+          l.slug.toLowerCase() === targetSlug.toLowerCase() ||
+          l.id.toLowerCase() === targetSlug.toLowerCase()
+      );
       if (localMatch) {
         setActiveLinkId(localMatch.id);
         setIsVisitorLoading(false);
@@ -365,28 +476,6 @@ export default function App() {
         }
         return next;
       });
-    }
-  };
-
-  // Apply preset
-  const handleApplyPreset = (index: number) => {
-    const preset = SAMPLE_PRESETS[index];
-    if (preset) {
-      setFormState({
-        targetUrl: preset.targetUrl,
-        customSlug: '',
-        logoUrl: preset.logoUrl || '',
-        headline: preset.headline,
-        subtext: preset.subtext || '',
-        btnText: preset.btnText,
-        btnUrl: preset.btnUrl,
-        bgColor: preset.bgColor,
-        btnColor: preset.btnColor,
-        position: preset.position,
-        badgeText: preset.badgeText || '',
-      });
-      setFormErrors({});
-      addToast(`예시 ${index + 1} 템플릿이 적용되었습니다.`);
     }
   };
 
@@ -713,11 +802,14 @@ export default function App() {
             formState={formState}
             onChange={handleFormChange}
             onSubmit={handleCreateLink}
-            onApplyPreset={handleApplyPreset}
             isCreating={isCreating}
             errors={formErrors}
             newlyCreatedLink={newlyCreatedLink}
-            onCopyCreatedLink={(url) => addToast(`단축 링크가 복사되었습니다! (${url})`, 'success')}
+            onCopyCreatedLink={(url) => addToast(`단축 링크가 복사되었습니다!`, 'success')}
+            onOpenOverlay={(link) => {
+              setActiveLinkId(link.id);
+              setIsPublicVisitor(true);
+            }}
           />
 
           <LinkList
@@ -727,7 +819,6 @@ export default function App() {
             onDeleteLink={handleDeleteLink}
             onClearAll={handleClearAll}
             onCopyShortUrl={handleCopyShortUrl}
-            onLoadSample={() => setLinks(INITIAL_LINKS)}
           />
         </div>
 
