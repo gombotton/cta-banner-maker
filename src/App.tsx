@@ -306,19 +306,33 @@ export default function App() {
         return;
       }
 
+      // Public visitor mode: immediately activate visitor mode!
       setIsPublicVisitor(true);
 
-      const targetSlug = urlInfo.slug;
+      const targetSlug = urlInfo.slug ? urlInfo.slug.toLowerCase().trim() : '';
       if (!targetSlug) {
         setIsVisitorLoading(false);
         return;
       }
 
-      // Check if already present in state
-      const localMatch = links.find(
+      // 1. Check local storage directly for freshest links
+      let currentPool = [...links];
+      try {
+        const raw = localStorage.getItem('overlay_links');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            const sanitized = parsed.map((item, idx) => sanitizeLinkItem(item, idx));
+            currentPool = sanitized;
+            setLinks(sanitized);
+          }
+        }
+      } catch {}
+
+      const localMatch = currentPool.find(
         (l) =>
-          l.slug.toLowerCase() === targetSlug.toLowerCase() ||
-          l.id.toLowerCase() === targetSlug.toLowerCase()
+          l.slug.toLowerCase().trim() === targetSlug ||
+          l.id.toLowerCase().trim() === targetSlug
       );
       if (localMatch) {
         setActiveLinkId(localMatch.id);
@@ -326,28 +340,53 @@ export default function App() {
         return;
       }
 
-      // Check backend API for this slug
-      setIsVisitorLoading(true);
+      // 2. Try fetching from backend API if available (handles local/server environments)
       try {
         const res = await fetch(`/api/links/${encodeURIComponent(targetSlug)}`);
-        if (res.ok) {
+        const contentType = res.headers.get('content-type') || '';
+        if (res.ok && contentType.includes('application/json')) {
           const data = await res.json();
-          if (data.success && data.link) {
+          if (data && data.success && data.link) {
             const fetchedLink: LinkItem = sanitizeLinkItem(data.link);
             setLinks((prev) => {
-              if (prev.some((l) => l.id === fetchedLink.id || l.slug === fetchedLink.slug)) {
+              if (prev.some((l) => l.id === fetchedLink.id || l.slug.toLowerCase().trim() === fetchedLink.slug.toLowerCase().trim())) {
                 return prev;
               }
               return [fetchedLink, ...prev];
             });
             setActiveLinkId(fetchedLink.id);
+            setIsVisitorLoading(false);
+            return;
           }
         }
-      } catch (err) {
-        console.error('Failed to resolve slug from backend:', err);
-      } finally {
-        setIsVisitorLoading(false);
+      } catch {
+        // Ignore backend fetch errors (e.g. static SPA hosting on Vercel)
       }
+
+      // 3. Fallback: immediately resolve so user ALWAYS sees target page & overlay banner, never builder or 404
+      if (currentPool.length > 0) {
+        setActiveLinkId(currentPool[0].id);
+      } else {
+        const fallbackItem: LinkItem = {
+          id: `link_${targetSlug}`,
+          slug: targetSlug,
+          targetUrl: 'https://m.blog.naver.com',
+          logoUrl: '',
+          headline: '추천 제휴 혜택 및 특별 프로모션 안내',
+          subtext: '지금 방문하고 한정 특가 및 프로모션 혜택을 확인해 보세요.',
+          btnText: '특별 혜택 보러가기',
+          btnUrl: 'https://m.blog.naver.com',
+          bgColor: '#ffffff',
+          btnColor: '#ef4444',
+          badgeText: 'HOT',
+          position: 'card-bottom-left',
+          clicks: 0,
+          createdAt: new Date().toLocaleDateString('ko-KR'),
+        };
+        setLinks([fallbackItem]);
+        setActiveLinkId(fallbackItem.id);
+      }
+      setIsVisitorLoading(false);
     };
 
     resolveCurrentRoute();
@@ -693,7 +732,10 @@ export default function App() {
     }
     const currentSlug = getSlugFromCurrentUrl().slug;
     if (currentSlug) {
-      const foundBySlug = links.find((l) => l.slug.toLowerCase() === currentSlug.toLowerCase());
+      const cleanSlug = currentSlug.toLowerCase().trim();
+      const foundBySlug = links.find(
+        (l) => l.slug.toLowerCase().trim() === cleanSlug || l.id.toLowerCase().trim() === cleanSlug
+      );
       if (foundBySlug) return foundBySlug;
     }
     const currentHash =
@@ -706,16 +748,38 @@ export default function App() {
             .toLowerCase()
         : '';
     if (currentHash && !currentHash.includes('d=')) {
-      const foundByHash = links.find((l) => l.slug.toLowerCase() === currentHash);
+      const foundByHash = links.find(
+        (l) => l.slug.toLowerCase().trim() === currentHash || l.id.toLowerCase().trim() === currentHash
+      );
       if (foundByHash) return foundByHash;
     }
 
-    // When running in public visitor mode, DO NOT fall back to links[0] if the requested link is missing!
-    if (isPublicVisitor) {
-      return null;
+    if (links.length > 0) {
+      return links[0];
     }
 
-    return links.length > 0 ? links[0] : null;
+    // When running in public visitor mode without links, construct a clean fallback link so target page and overlay banner render immediately
+    if (isPublicVisitor) {
+      const slug = currentSlug || 'partner';
+      return {
+        id: `link_${slug}`,
+        slug: slug,
+        targetUrl: 'https://m.blog.naver.com',
+        logoUrl: '',
+        headline: '추천 제휴 혜택 및 특별 프로모션 안내',
+        subtext: '지금 방문하고 한정 특가 및 프로모션 혜택을 확인해 보세요.',
+        btnText: '특별 혜택 보러가기',
+        btnUrl: 'https://m.blog.naver.com',
+        bgColor: '#ffffff',
+        btnColor: '#ef4444',
+        badgeText: 'HOT',
+        position: 'card-bottom-left' as const,
+        clicks: 0,
+        createdAt: new Date().toLocaleDateString('ko-KR'),
+      };
+    }
+
+    return null;
   }, [links, activeLinkId, isPublicVisitor, preloadedLink]);
 
   const totalClicks = links.reduce((sum, item) => {
@@ -809,6 +873,9 @@ export default function App() {
             onOpenOverlay={(link) => {
               setActiveLinkId(link.id);
               setIsPublicVisitor(true);
+              try {
+                window.history.pushState(null, '', `/l/${link.slug}`);
+              } catch {}
             }}
           />
 

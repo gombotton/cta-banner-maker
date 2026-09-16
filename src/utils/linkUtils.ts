@@ -241,31 +241,27 @@ export function getEffectiveBaseOrigin(): string {
 }
 
 /**
- * Build the self-contained, shareable short URL.
- * Embedding the data payload in ?d= ensures that when the link is opened on any platform
- * (Vercel, Netlify, GitHub Pages, KakaoTalk mobile, other browsers), the visitor view
- * renders instantly without requiring an external database or backend server.
+ * Build the shareable banner short URL based on current domain (window.location.origin).
+ * Produces clean, short URLs like: https://your-domain.vercel.app/l/blog-hamr
  */
 export function buildShareUrl(link: LinkItem, customOrigin?: string): string {
-  let origin = customOrigin || getEffectiveBaseOrigin();
+  let origin = customOrigin;
   if (!origin && typeof window !== 'undefined') {
     origin = window.location.origin;
   }
-  origin = origin.replace(/\/+$/, '');
-  const encodedPayload = encodeLinkToPayload(link);
-  return `${origin}/l/${link.slug}?d=${encodedPayload}`;
+  if (!origin) {
+    origin = getEffectiveBaseOrigin();
+  }
+  origin = (origin || '').trim().replace(/\/+$/, '');
+  const cleanSlug = (link.slug || 'link').trim().replace(/^\/+/, '');
+  return `${origin}/l/${cleanSlug}`;
 }
 
 /**
  * Clean short URL without data payload query string (for display)
  */
 export function buildCleanShareUrl(link: LinkItem, customOrigin?: string): string {
-  let origin = customOrigin || getEffectiveBaseOrigin();
-  if (!origin && typeof window !== 'undefined') {
-    origin = window.location.origin;
-  }
-  origin = origin.replace(/\/+$/, '');
-  return `${origin}/l/${link.slug}`;
+  return buildShareUrl(link, customOrigin);
 }
 
 /**
