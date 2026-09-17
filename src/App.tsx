@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { LinkItem, BannerPosition } from './types';
-import { INITIAL_LINKS } from './data/sampleData';
 import { Header } from './components/Header';
 import { LinkBuilderForm, FormState } from './components/LinkBuilderForm';
 import { LinkList } from './components/LinkList';
@@ -11,88 +10,64 @@ import { ConfirmModal } from './components/ConfirmModal';
 import {
   normalizeUrl,
   generateSmartSlug,
-  buildShareUrl,
-  decodeLinkFromPayload,
   getSlugFromCurrentUrl,
   copyTextToClipboard,
-  fetchUltraShortUrl,
 } from './utils/linkUtils';
 
+// NoCodeBackend 설정 (Vercel 환경변수 및 고정 API 키)
+const NCB_BASE =
+  (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_NCB_BASE_URL) ||
+  'https://api.nocodebackend.com';
+const NCB_KEY =
+  (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_NCB_KEY) ||
+  'sk_live_4hgt7dx3zqndr4ek7m';
+
+const ncbHeaders = {
+  'Content-Type': 'application/json',
+  Authorization: `Bearer ${NCB_KEY}`,
+};
+
+const STORAGE_KEY = 'user_overlay_links';
+
+// 링크 객체 정규화 및 데이터 누락 방지 함수
 function sanitizeLinkItem(item: any, fallbackIndex = 0): LinkItem {
+  let cfg: any = {};
+  if (item.cta_config) {
+    try {
+      cfg = typeof item.cta_config === 'string' ? JSON.parse(item.cta_config) : item.cta_config;
+    } catch {}
+  }
+
+  const slug = String(item.short_id || item.slug || `link-${fallbackIndex}`);
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+
   return {
-    id: String(item.id || `link_${item.slug || fallbackIndex}_${Date.now()}`),
-    slug: String(item.slug || `slug-${fallbackIndex}`),
-    targetUrl: String(item.targetUrl || ''),
-    headline: String(item.headline || '제목 없음'),
-    btnText: String(item.btnText || '보러가기'),
-    btnUrl: String(item.btnUrl || ''),
-    bgColor: String(item.bgColor || '#ffffff'),
-    btnColor: String(item.btnColor || '#ef4444'),
-    position: item.position || 'card-bottom-left',
-    badgeText: item.badgeText ? String(item.badgeText) : '',
-    subtext: item.subtext ? String(item.subtext) : '',
-    logoUrl: item.logoUrl ? String(item.logoUrl) : '',
-    clicks: typeof item.clicks === 'number' && !isNaN(item.clicks) ? item.clicks : 0,
-    createdAt: String(item.createdAt || new Date().toLocaleDateString('ko-KR')),
-    shortUrl:
-      item.shortUrl && !String(item.shortUrl).includes('tinyurl.com')
-        ? String(item.shortUrl)
-        : undefined,
+    id: String(item.id || item.short_id || `link_${slug}_${Date.now()}`),
+    slug: slug,
+    targetUrl: String(item.target_url || item.targetUrl || ''),
+    headline: String(cfg.headline || item.headline || '제목 없음'),
+    btnText: String(cfg.btnText || item.btnText || '보러가기'),
+    btnUrl: String(cfg.btnUrl || item.btnUrl || ''),
+    bgColor: String(cfg.bgColor || item.bgColor || '#ffffff'),
+    btnColor: String(cfg.btnColor || item.btnColor || '#ef4444'),
+    position: (cfg.position || item.position || 'card-bottom-left') as BannerPosition,
+    badgeText: String(cfg.badgeText || item.badgeText || ''),
+    subtext: String(cfg.subtext || item.subtext || ''),
+    logoUrl: String(cfg.logoUrl || item.logoUrl || ''),
+    clicks: Number(item.views ?? item.clicks ?? 0),
+    createdAt: String(item.created_at || item.createdAt || new Date().toLocaleDateString('ko-KR')),
+    shortUrl: `${origin}/l/${encodeURIComponent(slug)}`,
   };
 }
 
 export default function App() {
-  // Check if current page has inline encoded payload ?d=...
-  const inlinePayloadLink = useMemo<LinkItem | null>(() => {
-    if (typeof window === 'undefined') return null;
-    try {
-      const searchParams = new URLSearchParams(window.location.search);
-      let d = searchParams.get('d');
-      if (!d && window.location.hash && window.location.hash.includes('?')) {
-        const queryPart = window.location.hash.split('?')[1];
-        d = new URLSearchParams(queryPart).get('d');
-      }
-      if (d) {
-        const decoded = decodeLinkFromPayload(d);
-        if (decoded && decoded.targetUrl && decoded.headline) {
-          return {
-            id: `link_${decoded.slug || 'direct'}_${Date.now()}`,
-            slug: decoded.slug || 'link',
-            targetUrl: decoded.targetUrl,
-            logoUrl: decoded.logoUrl || '',
-            headline: decoded.headline,
-            subtext: decoded.subtext || '',
-            btnText: decoded.btnText || '보러가기',
-            btnUrl: decoded.btnUrl || '',
-            bgColor: decoded.bgColor || '#ffffff',
-            btnColor: decoded.btnColor || '#ef4444',
-            badgeText: decoded.badgeText || '',
-            position: decoded.position || 'card-bottom-left',
-            clicks: 0,
-            createdAt: new Date().toLocaleDateString('ko-KR'),
-          };
-        }
-      }
-    } catch {}
-    return null;
-  }, []);
-
-  // Check if current page has server-preloaded link data or is accessed as a visitor via short link (/l/:slug or #slug)
-  const rawPreloaded: any =
-    typeof window !== 'undefined' ? (window as any).__PRELOADED_LINK__ || null : null;
-  const preloadedLink: LinkItem | null = rawPreloaded ? sanitizeLinkItem(rawPreloaded) : null;
   const initialUrlInfo = getSlugFromCurrentUrl();
 
-  // User requirement: "생성된 링크목록은 빈상태로 둘것" -> start with completely empty list
-  const STORAGE_KEY = 'user_overlay_links';
-
-  // Load links from localStorage (clean of any sample/demo data)
+  // 1. 로컬스토리지에서 기존 링크 로드
   const [links, setLinks] = useState<LinkItem[]>(() => {
     let baseList: LinkItem[] = [];
     try {
-      // Clear legacy sample/mock storage
       localStorage.removeItem('overlay_links');
-
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
@@ -100,35 +75,14 @@ export default function App() {
           baseList = parsed.map((l, i) => sanitizeLinkItem(l, i));
         }
       }
-    } catch {
-      // Fallback
-    }
-
-    if (inlinePayloadLink) {
-      const filtered = baseList.filter(
-        (l) => l.slug.toLowerCase() !== inlinePayloadLink.slug.toLowerCase()
-      );
-      return [inlinePayloadLink, ...filtered];
-    }
-    if (preloadedLink) {
-      const filtered = baseList
-        .filter((l) => l.id !== preloadedLink.id && l.slug !== preloadedLink.slug)
-        .map((l, i) => sanitizeLinkItem(l, i));
-      return [preloadedLink, ...filtered];
-    }
+    } catch {}
     return baseList;
   });
 
-  // Whether the app is running in public visitor mode (when accessed via /l/:slug by external visitors)
-  const [isPublicVisitor, setIsPublicVisitor] = useState<boolean>(() => {
-    if (inlinePayloadLink) return true;
-    if (preloadedLink) return true;
-    return initialUrlInfo.isPublicViewer;
-  });
+  // 방문자 뷰어 여부 판별
+  const [isPublicVisitor, setIsPublicVisitor] = useState<boolean>(() => initialUrlInfo.isPublicViewer);
 
   const [activeLinkId, setActiveLinkId] = useState<string | null>(() => {
-    if (inlinePayloadLink) return inlinePayloadLink.id;
-    if (preloadedLink) return preloadedLink.id;
     if (initialUrlInfo.isPublicViewer && initialUrlInfo.slug) {
       const match = links.find((l) => l.slug.toLowerCase() === initialUrlInfo.slug?.toLowerCase());
       if (match) return match.id;
@@ -138,36 +92,24 @@ export default function App() {
   });
 
   const [isVisitorLoading, setIsVisitorLoading] = useState<boolean>(() => {
-    if (inlinePayloadLink) return false;
     if (!initialUrlInfo.isPublicViewer) return false;
-    if (preloadedLink) return false;
     if (initialUrlInfo.slug) {
       return !links.some((l) => l.slug.toLowerCase() === initialUrlInfo.slug?.toLowerCase());
     }
     return false;
   });
 
-  // Track the most recently created or selected link
-  const [recentLink, setRecentLink] = useState<LinkItem | null>(() => {
-    if (inlinePayloadLink) return inlinePayloadLink;
-    if (preloadedLink) return preloadedLink;
-    return links.length > 0 ? links[0] : null;
-  });
-
-  // Dedicated newly created link state for immediate celebration and copy banner
+  const [recentLink, setRecentLink] = useState<LinkItem | null>(() => (links.length > 0 ? links[0] : null));
   const [newlyCreatedLink, setNewlyCreatedLink] = useState<LinkItem | null>(null);
-  const [visitorFallbackLink, setVisitorFallbackLink] = useState<LinkItem | null>(null);
   const [isCreating, setIsCreating] = useState<boolean>(false);
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
-  // Delete Confirmation Modal State (replaces blocked window.confirm)
   const [deleteConfirm, setDeleteConfirm] = useState<
     | { type: 'single'; id: string; title: string }
     | { type: 'all'; count: number }
     | null
   >(null);
 
-  // Form state initialized cleanly without sample data
   const [formState, setFormState] = useState<FormState>({
     targetUrl: '',
     customSlug: '',
@@ -182,7 +124,6 @@ export default function App() {
     badgeText: '',
   });
 
-  // Toasts
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
   const addToast = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
@@ -197,7 +138,16 @@ export default function App() {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   };
 
-  // Sync links to localStorage
+  // 구형 해시(#d=...) 강제 제거 및 주소창 정리
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.location.hash.includes('d=')) {
+      const urlInfo = getSlugFromCurrentUrl();
+      const cleanPath = urlInfo.slug ? `/l/${encodeURIComponent(urlInfo.slug)}` : window.location.pathname;
+      window.history.replaceState(null, '', cleanPath);
+    }
+  }, []);
+
+  // 로컬스토리지 동기화
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(links));
@@ -206,208 +156,82 @@ export default function App() {
     }
   }, [links]);
 
-  // Load links from backend API on initial mount and sync local storage links
+  // NoCodeBackend에서 최신 링크 목록 불러오기
   useEffect(() => {
-    // 1. Sync any existing local storage links to server database
-    try {
-      localStorage.removeItem('overlay_links');
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          fetch('/api/links/sync', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ links: parsed }),
-          }).catch(console.error);
+    const fetchLinksFromNCB = async () => {
+      try {
+        const res = await fetch(`${NCB_BASE}/read/cta_links`, {
+          method: 'GET',
+          headers: ncbHeaders,
+        });
+        if (res.ok) {
+          const records = await res.json();
+          if (Array.isArray(records) && records.length > 0) {
+            const mappedLinks = records.map((r: any, idx: number) => sanitizeLinkItem(r, idx));
+            setLinks((prev) => {
+              const ids = new Set(mappedLinks.map((m) => m.slug.toLowerCase()));
+              const localOnly = prev.filter((p) => !ids.has(p.slug.toLowerCase()));
+              return [...mappedLinks, ...localOnly];
+            });
+          }
         }
+      } catch (err) {
+        console.error('NoCodeBackend 로드 오류:', err);
       }
-    } catch {
-      // Ignore
-    }
+    };
 
-    // 2. Fetch all persistent links from server
-    fetch('/api/links')
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.success && Array.isArray(data.links) && data.links.length > 0) {
-          setLinks((prev) => {
-            const ids = new Set(prev.map((l) => l.id));
-            const newFromBackend = data.links
-              .map((l: any, i: number) => sanitizeLinkItem(l, i))
-              .filter((l: LinkItem) => !ids.has(l.id));
-            return [...prev, ...newFromBackend];
-          });
-        }
-      })
-      .catch((err) => console.error('Failed to load links from API:', err));
+    fetchLinksFromNCB();
   }, []);
 
-  // Handle URL changes & resolve target slug for public visitors
+  // 방문자 슬러그 확인 및 DB 데이터 매칭
   useEffect(() => {
     const resolveCurrentRoute = async () => {
       const urlInfo = getSlugFromCurrentUrl();
-
-      // Check if URL has ?d= or #d= payload
-      let encodedData = '';
-      try {
-        const searchParams = new URLSearchParams(window.location.search);
-        encodedData = searchParams.get('d') || '';
-        if (!encodedData && window.location.hash) {
-          const rawHash = window.location.hash.replace(/^#\/?/, '');
-          if (rawHash.startsWith('d=')) {
-            encodedData = rawHash.replace(/^d=/, '');
-          } else if (rawHash.includes('d=')) {
-            const match = rawHash.match(/[?&#]d=([^&]+)/) || rawHash.match(/d=([^&]+)/);
-            if (match) encodedData = match[1];
-          }
-        }
-      } catch {}
-
-      if (encodedData) {
-        const decoded = decodeLinkFromPayload(encodedData);
-        if (decoded && decoded.targetUrl && decoded.headline) {
-          const restoredSlug = decoded.slug || urlInfo.slug || 'link';
-          const restoredLink: LinkItem = {
-            id: `link_${restoredSlug}_${Date.now()}`,
-            slug: restoredSlug,
-            targetUrl: decoded.targetUrl,
-            logoUrl: decoded.logoUrl || '',
-            headline: decoded.headline,
-            subtext: decoded.subtext || '',
-            btnText: decoded.btnText || '보러가기',
-            btnUrl: decoded.btnUrl || '',
-            bgColor: decoded.bgColor || '#ffffff',
-            btnColor: decoded.btnColor || '#ef4444',
-            badgeText: decoded.badgeText || '',
-            position: decoded.position || 'card-bottom-left',
-            clicks: 0,
-            createdAt: new Date().toLocaleDateString('ko-KR'),
-          };
-
-          setLinks((prev) => {
-            const existingIdx = prev.findIndex(
-              (l) => l.slug.toLowerCase() === restoredLink.slug.toLowerCase()
-            );
-            if (existingIdx >= 0) {
-              const updated = [...prev];
-              updated[existingIdx] = restoredLink;
-              return updated;
-            }
-            return [restoredLink, ...prev];
-          });
-
-          setActiveLinkId(restoredLink.id);
-          setIsPublicVisitor(true);
-          setIsVisitorLoading(false);
-          try {
-            window.history.replaceState(null, '', `/l/${encodeURIComponent(restoredLink.slug)}`);
-          } catch {}
-          return;
-        }
-      }
-
       if (!urlInfo.isPublicViewer) {
         setIsPublicVisitor(false);
         return;
       }
 
-      // Public visitor mode: immediately activate visitor mode!
       setIsPublicVisitor(true);
-
       const targetSlug = urlInfo.slug ? urlInfo.slug.toLowerCase().trim() : '';
       if (!targetSlug) {
         setIsVisitorLoading(false);
         return;
       }
 
-      // 1. Check local storage directly for freshest links
-      let currentPool = [...links];
-      try {
-        const raw = localStorage.getItem(STORAGE_KEY);
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            const sanitized = parsed.map((item, idx) => sanitizeLinkItem(item, idx));
-            currentPool = sanitized;
-            setLinks(sanitized);
-          }
-        }
-      } catch {}
-
-      const localMatch = currentPool.find((l) => {
-        const cleanS = l.slug.toLowerCase().trim();
-        return (
-          cleanS === targetSlug ||
-          l.id.toLowerCase().trim() === targetSlug ||
-          decodeURIComponent(cleanS) === targetSlug ||
-          encodeURIComponent(cleanS) === targetSlug
-        );
-      });
-      if (localMatch) {
-        setActiveLinkId(localMatch.id);
+      // 1. 현재 메모리에 이미 존재하는지 확인
+      const match = links.find((l) => l.slug.toLowerCase().trim() === targetSlug);
+      if (match) {
+        setActiveLinkId(match.id);
         setIsVisitorLoading(false);
         return;
       }
 
-      // 2. Try fetching from backend API if available (handles local/server environments)
+      // 2. NoCodeBackend 검색 API 호출
       try {
-        const res = await fetch(`/api/links/${encodeURIComponent(targetSlug)}`);
-        const contentType = res.headers.get('content-type') || '';
-        if (res.ok && contentType.includes('application/json')) {
-          const data = await res.json();
-          if (data && data.success && data.link) {
-            const fetchedLink: LinkItem = sanitizeLinkItem(data.link);
-            setLinks((prev) => {
-              if (
-                prev.some(
-                  (l) =>
-                    l.id === fetchedLink.id ||
-                    l.slug.toLowerCase().trim() === fetchedLink.slug.toLowerCase().trim()
-                )
-              ) {
-                return prev;
-              }
-              return [fetchedLink, ...prev];
-            });
-            setActiveLinkId(fetchedLink.id);
+        const res = await fetch(`${NCB_BASE}/search/cta_links`, {
+          method: 'POST',
+          headers: ncbHeaders,
+          body: JSON.stringify({ short_id: targetSlug }),
+        });
+        if (res.ok) {
+          const result = await res.json();
+          if (Array.isArray(result) && result.length > 0) {
+            const fetched = sanitizeLinkItem(result[0]);
+            setLinks((prev) => [fetched, ...prev.filter((p) => p.slug !== fetched.slug)]);
+            setActiveLinkId(fetched.id);
             setIsVisitorLoading(false);
             return;
           }
         }
-      } catch {
-        // Ignore backend fetch errors (e.g. static SPA hosting on Vercel)
+      } catch (e) {
+        console.error('NoCodeBackend 검색 오류:', e);
       }
 
-      // 3. Fallback: immediately resolve so visitor ALWAYS sees target page & overlay banner, never builder or 404
-      if (currentPool.length > 0) {
-        setActiveLinkId(currentPool[0].id);
-      } else {
-        const fallbackItem: LinkItem = {
-          id: `link_${targetSlug}`,
-          slug: targetSlug,
-          targetUrl: 'https://m.blog.naver.com',
-          logoUrl: '',
-          headline: '추천 제휴 혜택 및 특별 프로모션 안내',
-          subtext: '지금 방문하고 한정 특가 및 프로모션 혜택을 확인해 보세요.',
-          btnText: '특별 혜택 보러가기',
-          btnUrl: 'https://m.blog.naver.com',
-          bgColor: '#ffffff',
-          btnColor: '#ef4444',
-          badgeText: 'HOT',
-          position: 'card-bottom-left',
-          clicks: 0,
-          createdAt: new Date().toLocaleDateString('ko-KR'),
-        };
-        // Preserve user local storage and do not overwrite creator link list with fallback
-        setVisitorFallbackLink(fallbackItem);
-        setActiveLinkId(fallbackItem.id);
-      }
       setIsVisitorLoading(false);
     };
 
     resolveCurrentRoute();
-
     window.addEventListener('popstate', resolveCurrentRoute);
     window.addEventListener('hashchange', resolveCurrentRoute);
     return () => {
@@ -416,126 +240,18 @@ export default function App() {
     };
   }, [links]);
 
-  // Handle URL hash on initial load or change
-  // Supports clean short slugs (#rinkle, #clean3s) and legacy payload links (#d=...)
-  useEffect(() => {
-    const handleHash = async () => {
-      const rawHash = window.location.hash.replace(/^#\/?/, '').trim();
-      if (!rawHash) return;
-
-      // Check if hash has legacy payload parameter: e.g. d=BASE64
-      if (rawHash.includes('d=')) {
-        let encodedData = '';
-        try {
-          const params = new URLSearchParams(rawHash);
-          encodedData = params.get('d') || '';
-        } catch {
-          const match = rawHash.match(/d=([^&]+)/);
-          if (match) encodedData = match[1];
-        }
-
-        if (encodedData) {
-          const decoded = decodeLinkFromPayload(encodedData);
-          if (decoded && decoded.targetUrl && decoded.headline) {
-            const restoredLink: LinkItem = {
-              id: `link_${decoded.slug || 'restored'}_${Date.now()}`,
-              slug: decoded.slug || 'link',
-              targetUrl: decoded.targetUrl,
-              logoUrl: decoded.logoUrl || '',
-              headline: decoded.headline,
-              subtext: decoded.subtext || '',
-              btnText: decoded.btnText || '보러가기',
-              btnUrl: decoded.btnUrl || '',
-              bgColor: decoded.bgColor || '#ffffff',
-              btnColor: decoded.btnColor || '#ef4444',
-              badgeText: decoded.badgeText || '',
-              position: decoded.position || 'card-bottom-left',
-              clicks: 0,
-              createdAt: new Date().toLocaleDateString('ko-KR'),
-            };
-
-            // Save to backend API
-            fetch('/api/links', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(restoredLink),
-            }).catch(console.error);
-
-            setLinks((prev) => {
-              const existingIdx = prev.findIndex((l) => l.slug === restoredLink.slug);
-              if (existingIdx >= 0) {
-                const next = [...prev];
-                next[existingIdx] = restoredLink;
-                return next;
-              }
-              return [restoredLink, ...prev];
-            });
-
-            setActiveLinkId(restoredLink.id);
-            setRecentLink(restoredLink);
-
-            // Clean up hash to concise short URL
-            window.history.replaceState(null, '', `/#${restoredLink.slug}`);
-            addToast(`타깃 링크('${decoded.headline}')가 정상 로드되었습니다!`, 'info');
-            return;
-          }
-        }
-      }
-
-      // Simple clean slug check (e.g. #rinkle or #clean3s)
-      const cleanSlug = rawHash.replace(/^(r\/)?/, '').split('&')[0].split('?')[0].trim().toLowerCase();
-      if (!cleanSlug || cleanSlug === 'builder' || cleanSlug === 'home') return;
-
-      const found = links.find((l) => l.slug.toLowerCase() === cleanSlug);
-      if (found) {
-        setActiveLinkId(found.id);
-        setRecentLink(found);
-        return;
-      }
-
-      // If not in local state, fetch from backend API
-      try {
-        const res = await fetch(`/api/links/${encodeURIComponent(cleanSlug)}`);
-        if (res.ok) {
-          const data = await res.json();
-          if (data.success && data.link) {
-            const fetchedLink: LinkItem = data.link;
-            setLinks((prev) => {
-              if (prev.some((l) => l.id === fetchedLink.id || l.slug === fetchedLink.slug)) {
-                return prev;
-              }
-              return [fetchedLink, ...prev];
-            });
-            setActiveLinkId(fetchedLink.id);
-            setRecentLink(fetchedLink);
-          }
-        }
-      } catch (err) {
-        console.error('Failed to fetch link by slug:', err);
-      }
-    };
-
-    handleHash();
-    window.addEventListener('hashchange', handleHash);
-    return () => window.removeEventListener('hashchange', handleHash);
-  }, [links]);
-
-  // Form change handler
   const handleFormChange = (updates: Partial<FormState>) => {
     setFormState((prev) => ({ ...prev, ...updates }));
-    // Clear field-specific error if user types
     if (Object.keys(formErrors).length > 0) {
       setFormErrors((prev) => {
         const next = { ...prev };
-        for (const key of Object.keys(updates)) {
-          delete next[key];
-        }
+        for (const key of Object.keys(updates)) delete next[key];
         return next;
       });
     }
   };
 
-  // Handle Create Link
+  // 링크 생성 핸들러 (NoCodeBackend 영구 저장)
   const handleCreateLink = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -545,22 +261,14 @@ export default function App() {
     const rawBtnUrl = formState.btnUrl.trim();
 
     const errors: Record<string, string> = {};
-    if (!rawTarget) {
-      errors.targetUrl = '공유할 원본 글 링크(Target URL)를 입력해 주세요.';
-    }
-    if (!rawHeadline) {
-      errors.headline = '메인 카피(배너 문구)를 입력해 주세요.';
-    }
-    if (!rawBtnText) {
-      errors.btnText = '버튼 문구를 입력해 주세요.';
-    }
-    if (!rawBtnUrl) {
-      errors.btnUrl = '버튼 클릭 시 이동할 제휴/랜딩 링크를 입력해 주세요.';
-    }
+    if (!rawTarget) errors.targetUrl = '공유할 원본 글 링크(Target URL)를 입력해 주세요.';
+    if (!rawHeadline) errors.headline = '메인 카피(배너 문구)를 입력해 주세요.';
+    if (!rawBtnText) errors.btnText = '버튼 문구를 입력해 주세요.';
+    if (!rawBtnUrl) errors.btnUrl = '버튼 클릭 시 이동할 제휴/랜딩 링크를 입력해 주세요.';
 
     if (Object.keys(errors).length > 0) {
       setFormErrors(errors);
-      addToast('필수 입력 항목(타깃 URL, 배너 문구, 버튼 문구, 이동 링크)을 확인해 주세요.', 'error');
+      addToast('필수 입력 항목을 확인해 주세요.', 'error');
       return;
     }
 
@@ -568,80 +276,62 @@ export default function App() {
     setIsCreating(true);
 
     try {
-      // Normalize URLs to ensure correct protocol (https://)
       const normalizedTargetUrl = normalizeUrl(rawTarget);
       const normalizedBtnUrl = normalizeUrl(rawBtnUrl);
       const normalizedLogoUrl = formState.logoUrl.trim() ? normalizeUrl(formState.logoUrl.trim()) : '';
-
-      // Smart slug generation (supports English, numbers, and Korean)
       const slug = generateSmartSlug(normalizedTargetUrl, formState.customSlug);
+      const origin = typeof window !== 'undefined' ? window.location.origin : '';
+
+      const configData = {
+        headline: rawHeadline,
+        subtext: formState.subtext.trim(),
+        btnText: rawBtnText,
+        btnUrl: normalizedBtnUrl,
+        logoUrl: normalizedLogoUrl,
+        bgColor: formState.bgColor,
+        btnColor: formState.btnColor,
+        position: formState.position,
+        badgeText: formState.badgeText.trim(),
+      };
 
       const newLink: LinkItem = {
         id: `link_${Date.now()}`,
         slug,
         targetUrl: normalizedTargetUrl,
-        logoUrl: normalizedLogoUrl,
-        headline: rawHeadline,
-        subtext: formState.subtext.trim(),
-        btnText: rawBtnText,
-        btnUrl: normalizedBtnUrl,
-        bgColor: formState.bgColor,
-        btnColor: formState.btnColor,
-        position: formState.position,
-        badgeText: formState.badgeText.trim(),
+        ...configData,
         clicks: 0,
         createdAt: new Date().toLocaleDateString('ko-KR'),
+        shortUrl: `${origin}/l/${encodeURIComponent(slug)}`,
       };
 
-      // 1. Immediately save to local state and localStorage so the link appears in the list instantly!
-      setLinks((prev) => {
-        const next = [newLink, ...prev.filter((l) => l.id !== newLink.id && l.slug !== newLink.slug)];
-        try {
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-        } catch {}
-        return next;
-      });
+      // 1. 화면에 즉시 등록
+      setLinks((prev) => [newLink, ...prev.filter((l) => l.slug !== newLink.slug)]);
       setActiveLinkId(newLink.id);
       setRecentLink(newLink);
       setNewlyCreatedLink(newLink);
-      addToast(`단축 CTA 링크가 성공적으로 생성되었습니다! (/l/${newLink.slug})`, 'success');
 
-      // 2. Sync to backend API (handles Vercel Serverless and Node server)
+      // 2. NoCodeBackend DB로 영구 저장
       try {
-        const res = await fetch('/api/links', {
+        await fetch(`${NCB_BASE}/create/cta_links`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: ncbHeaders,
           body: JSON.stringify({
-            ...newLink,
-            origin: typeof window !== 'undefined' ? window.location.origin : '',
+            short_id: slug,
+            target_url: normalizedTargetUrl,
+            cta_config: JSON.stringify(configData),
+            views: 0,
           }),
         });
-        const contentType = res.headers.get('content-type') || '';
-        if (res.ok && contentType.includes('application/json')) {
-          const data = await res.json();
-          if (data && data.success && data.link) {
-            const confirmedLink = sanitizeLinkItem(data.link);
-            setLinks((prev) => {
-              const updated = [confirmedLink, ...prev.filter((l) => l.id !== confirmedLink.id && l.id !== newLink.id)];
-              try {
-                localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-              } catch {}
-              return updated;
-            });
-            setActiveLinkId(confirmedLink.id);
-            setRecentLink(confirmedLink);
-            setNewlyCreatedLink(confirmedLink);
-          }
-        }
-      } catch (err) {
-        console.error('Failed to sync link to backend API:', err);
+      } catch (syncErr) {
+        console.error('NoCodeBackend 저장 실패:', syncErr);
       }
+
+      addToast(`단축 CTA 링크가 성공적으로 생성되었습니다! (/l/${slug})`, 'success');
     } finally {
       setIsCreating(false);
     }
   };
 
-  // Trigger single link delete
   const handleDeleteLink = (id: string) => {
     const target = links.find((l) => l.id === id);
     if (target) {
@@ -653,7 +343,6 @@ export default function App() {
     }
   };
 
-  // Trigger clear all links
   const handleClearAll = () => {
     if (links.length > 0) {
       setDeleteConfirm({
@@ -663,15 +352,11 @@ export default function App() {
     }
   };
 
-  // Execute confirmed deletion
   const handleConfirmDelete = () => {
     if (!deleteConfirm) return;
 
     if (deleteConfirm.type === 'single') {
       const deletedId = deleteConfirm.id;
-      // Sync delete with backend
-      fetch(`/api/links/${deletedId}`, { method: 'DELETE' }).catch(console.error);
-
       setLinks((prev) => prev.filter((l) => l.id !== deletedId));
       if (activeLinkId === deletedId) {
         const remaining = links.filter((l) => l.id !== deletedId);
@@ -679,44 +364,40 @@ export default function App() {
       }
       addToast('선택한 링크가 삭제되었습니다.');
     } else if (deleteConfirm.type === 'all') {
-      // Sync clear all with backend
-      fetch('/api/links', { method: 'DELETE' }).catch(console.error);
-
       setLinks([]);
       setActiveLinkId(null);
-      addToast('모든 링크가 성공적으로 전체 삭제되었습니다.');
+      addToast('모든 링크가 삭제되었습니다.');
     }
-
     setDeleteConfirm(null);
   };
 
-  // Copy Share URL (direct visitor link: https://domain/l/:slug)
+  // 순수 단축 링크 복사 (해시 제거)
   const handleCopyShortUrl = async (linkOrIdOrSlug: LinkItem | string) => {
-    let targetLink: LinkItem | undefined;
+    let targetSlug = '';
     if (typeof linkOrIdOrSlug === 'object' && linkOrIdOrSlug !== null) {
-      targetLink = linkOrIdOrSlug;
+      targetSlug = linkOrIdOrSlug.slug;
     } else {
-      targetLink = links.find((l) => l.id === linkOrIdOrSlug || l.slug === linkOrIdOrSlug);
+      const found = links.find((l) => l.id === linkOrIdOrSlug || l.slug === linkOrIdOrSlug);
+      targetSlug = found ? found.slug : String(linkOrIdOrSlug);
     }
 
-    const urlToCopy = targetLink
-      ? buildShareUrl(targetLink)
-      : `${window.location.origin}/l/${typeof linkOrIdOrSlug === 'string' ? linkOrIdOrSlug : ''}`;
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    const cleanUrl = `${origin}/l/${encodeURIComponent(targetSlug)}`;
 
-    const copied = await copyTextToClipboard(urlToCopy);
+    const copied = await copyTextToClipboard(cleanUrl);
     if (copied) {
-      addToast(`배포 링크가 클립보드에 복사되었습니다! (${urlToCopy})`, 'success');
+      addToast(`단축 링크가 복사되었습니다! (${cleanUrl})`, 'success');
     } else {
-      addToast(`배포 링크 주소: ${urlToCopy}`);
+      addToast(`단축 링크 주소: ${cleanUrl}`);
     }
   };
 
-  // Select Link for prominent ShortUrlBox and DevicePreview
   const handleSelectLink = (link: LinkItem) => {
     setActiveLinkId(link.id);
     setRecentLink(link);
     setFormState({
       targetUrl: link.targetUrl,
+      customSlug: link.slug,
       logoUrl: link.logoUrl || '',
       headline: link.headline || '',
       subtext: link.subtext || '',
@@ -730,118 +411,32 @@ export default function App() {
     addToast(`'${link.headline || link.slug}' 링크가 선택되었습니다.`, 'info');
   };
 
-  // CTA Click handler in Visitor View
   const handleCtaClick = (linkId: string, destinationUrl: string) => {
-    const link = links.find((l) => l.id === linkId);
-    if (link) {
-      fetch(`/api/links/${link.slug}/click`, { method: 'POST' }).catch(console.error);
-    }
-
-    // Increment clicks
     setLinks((prev) =>
       prev.map((item) =>
-        item.id === linkId
-          ? {
-              ...item,
-              clicks: (typeof item.clicks === 'number' && !isNaN(item.clicks) ? item.clicks : 0) + 1,
-            }
-          : item
+        item.id === linkId ? { ...item, clicks: (item.clicks || 0) + 1 } : item
       )
     );
-
-    addToast('제휴 랜딩 페이지로 이동합니다. (클릭수 +1)', 'success');
-
-    // Open target affiliate link in new window
     window.open(destinationUrl, '_blank', 'noopener,noreferrer');
   };
 
-  const activeLink = React.useMemo(() => {
-    if (preloadedLink && isPublicVisitor) {
-      return preloadedLink;
-    }
-    if (visitorFallbackLink && isPublicVisitor && (activeLinkId === visitorFallbackLink.id || !activeLinkId)) {
-      return visitorFallbackLink;
-    }
+  const activeLink = useMemo(() => {
     if (activeLinkId) {
       const found = links.find((l) => l.id === activeLinkId);
       if (found) return found;
     }
-    if (visitorFallbackLink && isPublicVisitor) {
-      return visitorFallbackLink;
-    }
-    const currentSlug = getSlugFromCurrentUrl().slug;
-    if (currentSlug) {
-      const cleanSlug = currentSlug.toLowerCase().trim();
-      const foundBySlug = links.find((l) => {
-        const s = l.slug.toLowerCase().trim();
-        return (
-          s === cleanSlug ||
-          l.id.toLowerCase().trim() === cleanSlug ||
-          decodeURIComponent(s) === cleanSlug ||
-          encodeURIComponent(s) === cleanSlug
-        );
-      });
-      if (foundBySlug) return foundBySlug;
-    }
-    const currentHash =
-      typeof window !== 'undefined'
-        ? window.location.hash
-            .replace(/^#\/?/, '')
-            .split('&')[0]
-            .split('?')[0]
-            .trim()
-            .toLowerCase()
-        : '';
-    if (currentHash && !currentHash.includes('d=')) {
-      const foundByHash = links.find(
-        (l) => l.slug.toLowerCase().trim() === currentHash || l.id.toLowerCase().trim() === currentHash
-      );
-      if (foundByHash) return foundByHash;
-    }
+    return links.length > 0 ? links[0] : null;
+  }, [links, activeLinkId]);
 
-    if (links.length > 0) {
-      return links[0];
-    }
+  const totalClicks = links.reduce((sum, item) => sum + (item.clicks || 0), 0);
 
-    // When running in public visitor mode without links, construct a clean fallback link so target page and overlay banner render immediately
-    if (isPublicVisitor) {
-      const slug = currentSlug || 'partner';
-      return {
-        id: `link_${slug}`,
-        slug: slug,
-        targetUrl: 'https://m.blog.naver.com',
-        logoUrl: '',
-        headline: '추천 제휴 혜택 및 특별 프로모션 안내',
-        subtext: '지금 방문하고 한정 특가 및 프로모션 혜택을 확인해 보세요.',
-        btnText: '특별 혜택 보러가기',
-        btnUrl: 'https://m.blog.naver.com',
-        bgColor: '#ffffff',
-        btnColor: '#ef4444',
-        badgeText: 'HOT',
-        position: 'card-bottom-left' as const,
-        clicks: 0,
-        createdAt: new Date().toLocaleDateString('ko-KR'),
-      };
-    }
-
-    return null;
-  }, [links, activeLinkId, isPublicVisitor, preloadedLink, visitorFallbackLink]);
-
-  const totalClicks = links.reduce((sum, item) => {
-    const count = typeof item.clicks === 'number' && !isNaN(item.clicks) ? item.clicks : 0;
-    return sum + count;
-  }, 0);
-
-  // ----------------------------------------------------
-  // PUBLIC VISITOR MODE: Immersive full-screen viewer
-  // (Triggered when someone opens /l/:slug or #slug in a new window)
-  // ----------------------------------------------------
+  // 방문자 뷰어 화면
   if (isPublicVisitor) {
     if (isVisitorLoading) {
       return (
         <div className="w-screen h-screen flex flex-col items-center justify-center bg-slate-900 text-white">
           <div className="w-9 h-9 border-3 border-blue-500 border-t-transparent rounded-full animate-spin mb-3"></div>
-          <p className="text-sm font-medium text-slate-300">타깃 웹페이지 전문을 불러오는 중...</p>
+          <p className="text-sm font-medium text-slate-300">콘텐츠를 불러오는 중...</p>
         </div>
       );
     }
@@ -858,7 +453,7 @@ export default function App() {
               href="/"
               className="inline-flex items-center justify-center px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold transition"
             >
-              CTA 링크 빌더 홈으로 이동
+              홈으로 이동
             </a>
           </div>
         </div>
@@ -889,23 +484,15 @@ export default function App() {
     );
   }
 
-  // ----------------------------------------------------
-  // ADMIN / BUILDER MODE: Permanent mainboard dashboard
-  // ----------------------------------------------------
+  // 관리자 / 빌더 메인 화면
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-800 font-sans">
-      {/* 1. Top Navigation Bar */}
-      <Header
-        totalLinks={links.length}
-        totalClicks={totalClicks}
-      />
+      <Header totalLinks={links.length} totalClicks={totalClicks} />
 
-      {/* 2. Mainboard: Builder Form & Device Preview */}
       <main
         id="view-builder"
         className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6"
       >
-        {/* Left: Input Form & Saved Link List (7 cols) */}
         <div className="lg:col-span-7 space-y-6">
           <LinkBuilderForm
             formState={formState}
@@ -934,7 +521,6 @@ export default function App() {
           />
         </div>
 
-        {/* Right: Live Interactive Device Preview (5 cols) */}
         <div className="lg:col-span-5 flex flex-col items-center">
           <DevicePreview
             formState={formState}
@@ -950,7 +536,6 @@ export default function App() {
         </div>
       </main>
 
-      {/* Delete Confirmation Modal (Reliable in iframe sandbox) */}
       <ConfirmModal
         isOpen={deleteConfirm !== null}
         title={
@@ -970,9 +555,7 @@ export default function App() {
         onCancel={() => setDeleteConfirm(null)}
       />
 
-      {/* Toast Notifications */}
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }
-
